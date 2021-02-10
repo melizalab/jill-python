@@ -134,7 +134,7 @@ def main(argv=None):
 
     q = queue.Queue(maxsize=args.buffer)
 
-    log.debug("- connecting to JACK server %s", args.server)
+    log.debug("- connecting to JACK server %s", args.server or "")
     client = jack.Client(args.name, servername=args.server)
     if client.status.server_started:
         log.info("- JACK server started")
@@ -186,7 +186,7 @@ def main(argv=None):
             q.put(None, timeout=q_timeout)
             event.wait()
     except KeyboardInterrupt:
-        parser.exit("\nInterrupted by user")
+        p.exit("\nInterrupted by user")
     except (queue.Full):
         log.error("buffer overrun!")
-        parser.exit(1)
+        p.exit(1)
