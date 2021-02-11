@@ -16,7 +16,7 @@ import numpy as np
 import h5py as h5
 import jack
 
-log = logging.getLogger("jlongstim")  # root logger
+log = logging.getLogger("jbigstim")  # root logger
 event = threading.Event()
 
 
@@ -75,7 +75,7 @@ def iter_datasets(datasets, block_size, gap_samples, loop=False):
                 n = dset.size - i
                 if n < block_size:
                     data = np.zeros(block_size, dtype="float32")
-                    data[i:i+n] = dset[i:i+n]
+                    data[:n] = dset[i:i+n]
                 else:
                     data = dset[i:i+block_size]
                 yield data.astype("float32")
@@ -119,7 +119,7 @@ def main(argv=None):
         help="number of periods used for buffering (default: %(default)d)"
     )
     p.add_argument("--output", "-o", help="create connection to output audio port")
-    p.add_argument("--name", "-n", default="jlongstim", help="set jack client name")
+    p.add_argument("--name", "-n", default="jbigstim", help="set jack client name")
     p.add_argument("--server", "-s", help="connect to specific jack daemon")
     p.add_argument(
         "datasets",
