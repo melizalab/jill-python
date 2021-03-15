@@ -22,7 +22,7 @@ event = threading.Event()
 
 def setup_log(log, debug=False):
     ch = logging.StreamHandler()
-    formatter = logging.Formatter("%(message)s")
+    formatter = logging.Formatter("%(asctime)s : %(message)s")
     loglevel = logging.DEBUG if debug else logging.INFO
     log.setLevel(loglevel)
     ch.setLevel(loglevel)
@@ -42,7 +42,19 @@ def split_hdf5_path(path):
     return (head, tail)
 
 
-def check_datasets(datasets, sampling_rate):
+def dset_amplitude(dset):
+    n = dset.chunks[0]
+    sse = 0
+    peak = 0
+    for i in range(0, dset.size, n):
+        signal = dset[i : i + n]
+        sse += np.sum(signal * signal)
+        peak = max(peak, np.abs(signal).max())
+    rms = np.sqrt(sse / dset.size)
+    return {"rms": 20 * np.log10(rms) + 3.0103, "peak": 20 * np.log10(peak) + 3.0103}
+
+
+def check_datasets(datasets, sampling_rate, check_amplitude=False):
     """check all datasets to ensure that they exist and have consistent sampling rates"""
     log.info("- checking datasets:")
     for dset_path in datasets:
@@ -59,10 +71,14 @@ def check_datasets(datasets, sampling_rate):
                 dset.size,
                 dset.size / dset.attrs["sampling_rate"],
             )
+            if check_amplitude:
+                amplitude = dset_amplitude(dset)
+                log.info("    - RMS=%(rms).2f dBFS; peak=%(peak).2f dBFS" % amplitude)
 
 
-def iter_datasets(datasets, block_size, gap_samples, loop=False):
+def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0):
     from itertools import cycle
+
     zeros = np.zeros(block_size, dtype="float32")
     if loop:
         datasets = cycle(datasets)
@@ -75,9 +91,11 @@ def iter_datasets(datasets, block_size, gap_samples, loop=False):
                 n = dset.size - i
                 if n < block_size:
                     data = np.zeros(block_size, dtype="float32")
-                    data[:n] = dset[i:i+n]
+                    data[:n] = dset[i : i + n] * scale
                 else:
-                    data = dset[i:i+block_size]
+                    data = dset[i : i + block_size] * scale
+                if data.max() > 1.0 or data.min() < -1.0:
+                    log.warn(" - warning: stimulus will clip around sample %d", i)
                 yield data.astype("float32")
             log.debug("- finished reading from %s", dset_path)
             for i in range(0, gap_samples, block_size):
@@ -113,10 +131,21 @@ def main(argv=None):
     )
     p.add_argument("--loop", "-l", action="store_true", help="loop the stimulus set")
     p.add_argument(
-        "--buffer", "-b",
+        "--buffer",
+        "-b",
         type=int,
         default=100,
-        help="number of periods used for buffering (default: %(default)d)"
+        help="number of periods used for buffering (default: %(default)d)",
+    )
+    p.add_argument(
+        "--check-amplitude", action="store_true", help="check amplitude of stimuli"
+    )
+    p.add_argument(
+        "--scale",
+        "-S",
+        default=0.0,
+        type=float,
+        help="scale output (default %(default).1f dB)",
     )
     p.add_argument("--output", "-o", help="create connection to output audio port")
     p.add_argument("--name", "-n", default="jbigstim", help="set jack client name")
@@ -133,17 +162,25 @@ def main(argv=None):
     setup_log(log, args.debug)
 
     q = queue.Queue(maxsize=args.buffer)
+    log.info("- this is jbigstim, version %s", __version__)
 
     log.debug("- connecting to JACK server %s", args.server or "")
     client = jack.Client(args.name, servername=args.server)
     if client.status.server_started:
         log.info("- JACK server started")
     if client.status.name_not_unique:
-        log.info("- unique name %s assigned to client", client.name)
+        log.info("  - unique name %s assigned to client", client.name)
 
     jack_sampling_rate = client.samplerate
     jack_period_size = client.blocksize
     q_timeout = jack_period_size * args.buffer / jack_sampling_rate
+    log.info("  - sample rate: %.1f Hz", jack_sampling_rate)
+    log.info(
+        "  - period size: %d samples (%.1f ms)",
+        jack_period_size,
+        jack_period_size / jack_sampling_rate * 1000,
+    )
+    log.info("  - buffer size: %d periods (%.1f ms)", args.buffer, q_timeout * 1000)
     client.set_xrun_callback(xrun)
     client.set_shutdown_callback(shutdown)
     client.outports.register("out")
@@ -169,9 +206,17 @@ def main(argv=None):
         port = client.outports[0]
         port.get_array()[:] = data
 
-    check_datasets(args.datasets, jack_sampling_rate)
+    check_datasets(args.datasets, jack_sampling_rate, args.check_amplitude)
 
-    block_g = iter_datasets(args.datasets, jack_period_size, int(args.gap * jack_sampling_rate))
+    scale_x = 10 ** (args.scale / 20)
+    log.info("- stimulus amplitude will be scaled by %.3fx", scale_x)
+    block_g = iter_datasets(
+        args.datasets,
+        jack_period_size,
+        int(args.gap * jack_sampling_rate),
+        loop=args.loop,
+        scale=scale_x,
+    )
     log.debug("- prefilling queue")
     for _, data in zip(range(args.buffer), block_g):
         q.put_nowait(data)
