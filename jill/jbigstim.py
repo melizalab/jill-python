@@ -76,7 +76,15 @@ def check_datasets(datasets, sampling_rate, check_amplitude=False):
                 log.info("    - RMS=%(rms).2f dBFS; peak=%(peak).2f dBFS" % amplitude)
 
 
-def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0):
+def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0, start_sample=0):
+    """ Iterate through the datasets, yielding blocks of samples
+
+    block_size: size of the block (should match audio playback period size)
+    gap_samples: the number of silent samples to play between each dataset
+    loop: if True, loop through the datasets endlessly
+    scale: rescale the output by this factor
+    start_s: for the first dataset only, start at this sample
+    """
     from itertools import cycle
 
     zeros = np.zeros(block_size, dtype="float32")
@@ -87,7 +95,7 @@ def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0):
         with h5.File(path, "r") as fp:
             dset = fp[dset_name]
             log.debug("- started reading from %s", dset_path)
-            for i in range(0, dset.size, block_size):
+            for i in range(start_sample, dset.size, block_size):
                 n = dset.size - i
                 if n < block_size:
                     data = np.zeros(block_size, dtype="float32")
@@ -98,6 +106,7 @@ def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0):
                     log.warn(" - warning: stimulus will clip around sample %d", i)
                 yield data.astype("float32")
             log.debug("- finished reading from %s", dset_path)
+            start_sample = 0
             for i in range(0, gap_samples, block_size):
                 yield zeros
 
@@ -146,6 +155,12 @@ def main(argv=None):
         default=0.0,
         type=float,
         help="scale output (default %(default).1f dB)",
+    )
+    p.add_argument(
+        "--start",
+        type=float,
+        default=0,
+        help="specify the time within the recording (in seconds) to start playback",
     )
     p.add_argument("--output", "-o", help="create connection to output audio port")
     p.add_argument("--name", "-n", default="jbigstim", help="set jack client name")
@@ -216,6 +231,7 @@ def main(argv=None):
         int(args.gap * jack_sampling_rate),
         loop=args.loop,
         scale=scale_x,
+        start_sample=int(args.start * jack_sampling_rate)
     )
     log.debug("- prefilling queue")
     for _, data in zip(range(args.buffer), block_g):
