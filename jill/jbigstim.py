@@ -138,16 +138,17 @@ def iter_datasets(
                 start_sample,
                 timedelta(seconds=start_sample / dset.attrs["sampling_rate"]),
             )
-
             for i in range(start_sample, dset.size, block_size):
                 n = dset.size - i
                 if n < block_size:
                     data = np.zeros(block_size, dtype="float32")
-                    data[:n] = dset[i : i + n] * scale
+                    data[:n] = dset[i : i + n]
                 else:
-                    data = dset[i : i + block_size] * scale
-                if data.max() > 1.0 or data.min() < -1.0:
-                    log.warn(" - warning: stimulus will clip around sample %d", i)
+                    data = dset[i : i + block_size]
+                if scale != 1.0:
+                    data *= scale
+                    if data.max() > 1.0 or data.min() < -1.0:
+                        log.warn(" - warning: stimulus will clip around sample %d", i)
                 yield data.astype("float32")
             log.info("- finished reading from %s", dset_path)
             for i in range(0, gap_samples, block_size):
@@ -267,6 +268,7 @@ def main(argv=None):
 
     scale_x = 10 ** (args.scale / 20)
     log.info("- stimulus amplitude will be scaled by %.3fx", scale_x)
+    log.info("- first stimulus will start at %.2f s", args.start)
     block_g = iter_datasets(
         args.datasets,
         jack_period_size,
