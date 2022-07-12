@@ -31,7 +31,7 @@ def setup_log(log, debug=False):
 
 
 def split_hdf5_path(path):
-    """given path='/path/to/file/entry/dset', splits into '/path/to/file' and 'entry/dset' """
+    """given path='/path/to/file/entry/dset', splits into '/path/to/file' and 'entry/dset'"""
     path = os.path.abspath(path.rstrip("/"))
     if os.access(path, os.F_OK):
         raise ValueError("dataset path must point to a dataset within an hdf5 file")
@@ -65,7 +65,9 @@ def check_datasets(datasets, sampling_rate, check_amplitude=False):
             if dset.ndim != 1:
                 raise ValueError(f"{dset_path} has more than one dimension")
             if dset_rate != sampling_rate:
-                raise ValueError(f"{dset_path} has the wrong sampling rate ({dset_rate}, needs to be {sampling_rate})")
+                raise ValueError(
+                    f"{dset_path} has the wrong sampling rate ({dset_rate}, needs to be {sampling_rate})"
+                )
             log.info(
                 "  ✓ %s is %d samples (%.2f s)",
                 dset_path,
@@ -84,18 +86,26 @@ def get_sync_start(dset, at_time):
     offset is calculated for `at_time` in the subsequent day.
     """
     from datetime import datetime, timedelta
+
     dset_timestamp = dset.parent.attrs["timestamp"]
     sampling_rate = dset.attrs["sampling_rate"]
-    dset_start = (datetime.fromtimestamp(dset_timestamp[0]) + 
-                  timedelta(microseconds=int(dset_timestamp[1])))
+    dset_start = datetime.fromtimestamp(dset_timestamp[0]) + timedelta(
+        microseconds=int(dset_timestamp[1])
+    )
     delta = at_time - dset_start
-    sample = int(delta.seconds * sampling_rate + delta.microseconds * sampling_rate / 1000)
+    sample = int(
+        delta.seconds * sampling_rate + delta.microseconds * sampling_rate / 1000
+    )
     if sample > dset.size:
-        raise ValueError(f"current time corresponds to sample {sample} but dataset is only {dset.size} long")
+        raise ValueError(
+            f"current time corresponds to sample {sample} but dataset is only {dset.size} long"
+        )
     return sample
-  
 
-def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0, clock_sync=False):
+
+def iter_datasets(
+    datasets, block_size, gap_samples, loop=False, scale=1.0, clock_sync=False
+):
     """Iterate through the datasets, yielding blocks of samples
 
     block_size: size of the block (should match audio playback period size)
@@ -122,10 +132,12 @@ def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0, cloc
             start_sample = 0
             if clock_sync:
                 start_sample = get_sync_start(dset, datetime.now())
-            log.info("- started reading from %s at sample %d (%s)", 
-                     dset_path, 
-                     start_sample,
-                     timedelta(seconds=start_sample / dset.attrs["sampling_rate"]))
+            log.info(
+                "- started reading from %s at sample %d (%s)",
+                dset_path,
+                start_sample,
+                timedelta(seconds=start_sample / dset.attrs["sampling_rate"]),
+            )
 
             for i in range(start_sample, dset.size, block_size):
                 n = dset.size - i
@@ -190,7 +202,7 @@ def main(argv=None):
     p.add_argument(
         "--sync-start",
         action="store_true",
-        help="start playback at sample corresponding to current time"
+        help="start playback at sample corresponding to current time",
     )
     p.add_argument("--output", "-o", help="create connection to output audio port")
     p.add_argument("--name", "-n", default="jbigstim", help="set jack client name")
@@ -261,7 +273,7 @@ def main(argv=None):
         int(args.gap * jack_sampling_rate),
         loop=args.loop,
         scale=scale_x,
-        clock_sync=args.sync_start
+        clock_sync=args.sync_start,
     )
     log.debug("- prefilling queue")
     for _, data in zip(range(args.buffer), block_g):
