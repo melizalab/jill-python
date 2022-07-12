@@ -61,10 +61,11 @@ def check_datasets(datasets, sampling_rate, check_amplitude=False):
         path, dset_name = split_hdf5_path(dset_path)
         with h5.File(path, "r") as fp:
             dset = fp[dset_name]
+            dset_rate = dset.attrs["sampling_rate"]
             if dset.ndim != 1:
                 raise ValueError(f"{dset_path} has more than one dimension")
-            if dset.attrs["sampling_rate"] != sampling_rate:
-                raise ValueError(f"{dset_path} has the wrong sampling rate")
+            if dset_rate != sampling_rate:
+                raise ValueError(f"{dset_path} has the wrong sampling rate ({dset_rate}, needs to be {sampling_rate})")
             log.info(
                 "  ✓ %s is %d samples (%.2f s)",
                 dset_path,
@@ -76,15 +77,39 @@ def check_datasets(datasets, sampling_rate, check_amplitude=False):
                 log.info("    - RMS=%(rms).2f dBFS; peak=%(peak).2f dBFS" % amplitude)
 
 
-def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0, start_sample=0):
-    """ Iterate through the datasets, yielding blocks of samples
+def get_sync_start(dset, at_time):
+    """Determines the sample offset in dset corresponding to the time of day `at_time`
+
+    If `at_time` is before the time of day when the recording started, then the
+    offset is calculated for `at_time` in the subsequent day.
+    """
+    from datetime import datetime, timedelta
+    dset_timestamp = dset.parent.attrs["timestamp"]
+    sampling_rate = dset.attrs["sampling_rate"]
+    dset_start = (datetime.fromtimestamp(dset_timestamp[0]) + 
+                  timedelta(microseconds=int(dset_timestamp[1])))
+    delta = at_time - dset_start
+    sample = int(delta.seconds * sampling_rate + delta.microseconds * sampling_rate / 1000)
+    if sample > dset.size:
+        raise ValueError(f"current time corresponds to sample {sample} but dataset is only {dset.size} long")
+    return sample
+  
+
+def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0, clock_sync=False):
+    """Iterate through the datasets, yielding blocks of samples
 
     block_size: size of the block (should match audio playback period size)
     gap_samples: the number of silent samples to play between each dataset
     loop: if True, loop through the datasets endlessly
     scale: rescale the output by this factor
-    start_s: for the first dataset only, start at this sample
+
+    clock_sync: if True, starts at the sample corresponding to the current time
+    of day in the recording (i.e. if the recording started at midnight and the
+    current time is 6:00 AM, playback would start 6 * 60 * 60 seconds into the
+    recording.
+
     """
+    from datetime import datetime, timedelta
     from itertools import cycle
 
     zeros = np.zeros(block_size, dtype="float32")
@@ -94,7 +119,14 @@ def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0, star
         path, dset_name = split_hdf5_path(dset_path)
         with h5.File(path, "r") as fp:
             dset = fp[dset_name]
-            log.debug("- started reading from %s", dset_path)
+            start_sample = 0
+            if clock_sync:
+                start_sample = get_sync_start(dset, datetime.now())
+            log.info("- started reading from %s at sample %d (%s)", 
+                     dset_path, 
+                     start_sample,
+                     timedelta(seconds=start_sample / dset.attrs["sampling_rate"]))
+
             for i in range(start_sample, dset.size, block_size):
                 n = dset.size - i
                 if n < block_size:
@@ -105,8 +137,7 @@ def iter_datasets(datasets, block_size, gap_samples, loop=False, scale=1.0, star
                 if data.max() > 1.0 or data.min() < -1.0:
                     log.warn(" - warning: stimulus will clip around sample %d", i)
                 yield data.astype("float32")
-            log.debug("- finished reading from %s", dset_path)
-            start_sample = 0
+            log.info("- finished reading from %s", dset_path)
             for i in range(0, gap_samples, block_size):
                 yield zeros
 
@@ -157,10 +188,9 @@ def main(argv=None):
         help="scale output (default %(default).1f dB)",
     )
     p.add_argument(
-        "--start",
-        type=float,
-        default=0,
-        help="specify the time within the recording (in seconds) to start playback",
+        "--sync-start",
+        action="store_true",
+        help="start playback at sample corresponding to current time"
     )
     p.add_argument("--output", "-o", help="create connection to output audio port")
     p.add_argument("--name", "-n", default="jbigstim", help="set jack client name")
@@ -231,7 +261,7 @@ def main(argv=None):
         int(args.gap * jack_sampling_rate),
         loop=args.loop,
         scale=scale_x,
-        start_sample=int(args.start * jack_sampling_rate)
+        clock_sync=args.sync_start
     )
     log.debug("- prefilling queue")
     for _, data in zip(range(args.buffer), block_g):
