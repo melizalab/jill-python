@@ -113,10 +113,11 @@ def iter_datasets(
     loop: if True, loop through the datasets endlessly
     scale: rescale the output by this factor
 
-    clock_sync: if True, starts at the sample corresponding to the current time
-    of day in the recording (i.e. if the recording started at midnight and the
-    current time is 6:00 AM, playback would start 6 * 60 * 60 seconds into the
-    recording.
+    clock_sync: if None, starts at zero. If nonzero, starts at the sample
+    corresponding to the current time of day in the recording, shifted by
+    `clock_sync` hours. Example: with `clock_sync` at 0, if the recording
+    started at midnight and the current time is 6:00 AM, playback would start 6
+    * 60 * 60 seconds into the recording.
 
     """
     from datetime import datetime, timedelta
@@ -130,8 +131,9 @@ def iter_datasets(
         with h5.File(path, "r") as fp:
             dset = fp[dset_name]
             start_sample = 0
-            if clock_sync:
-                start_sample = get_sync_start(dset, datetime.now())
+            if clock_sync is not None:
+                shifted = datetime.now() + timedelta(hours=clock_sync)
+                start_sample = get_sync_start(dset, shifted)
             log.info(
                 "- started reading from %s at sample %d (%s)",
                 dset_path,
@@ -202,8 +204,9 @@ def main(argv=None):
     )
     p.add_argument(
         "--sync-start",
-        action="store_true",
-        help="start playback at sample corresponding to current time",
+        type=float,
+        metavar="SHIFT",
+        help="start playback at sample corresponding to current time, shifted by SHIFT hours ",
     )
     p.add_argument("--output", "-o", help="create connection to output audio port")
     p.add_argument("--name", "-n", default="jbigstim", help="set jack client name")
@@ -268,7 +271,6 @@ def main(argv=None):
 
     scale_x = 10 ** (args.scale / 20)
     log.info("- stimulus amplitude will be scaled by %.3fx", scale_x)
-    log.info("- first stimulus will start at %.2f s", args.start)
     block_g = iter_datasets(
         args.datasets,
         jack_period_size,
