@@ -104,7 +104,7 @@ def get_sync_start(dset, at_time):
 
 
 def iter_datasets(
-    datasets, block_size, gap_samples, loop=False, scale=1.0, clock_sync=False
+    datasets, block_size, gap_samples, loop=False, scale=1.0, clock_sync=None
 ):
     """Iterate through the datasets, yielding blocks of samples
 
@@ -134,6 +134,9 @@ def iter_datasets(
             if clock_sync is not None:
                 shifted = datetime.now() + timedelta(hours=clock_sync)
                 start_sample = get_sync_start(dset, shifted)
+                # reset clock_sync to False; subsequent files need to start at
+                # zero offset
+                clock_sync = None
             log.info(
                 "- started reading from %s at sample %d (%s)",
                 dset_path,
